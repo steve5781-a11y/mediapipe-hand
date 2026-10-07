@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gesture Emoji</title>
+<meta name="description" content="MediaPipe 손 인식 + 직접 학습한 제스처 분류기로 브라우저에서 실시간 제스처를 인식하고 이모지를 날립니다.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✌️</text></svg>">
+<style>
+  :root {
+    --bg: #111317;
+    --surface: #1b1e24;
+    --surface-2: #252932;
+    --text: #eef0f4;
+    --muted: #9aa1ad;
+    --accent: #ffcc33;
+    --ok: #1f9d55;
+    --border: #2e333d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  header h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  header p { margin: 0; color: var(--muted); }
+  a { color: var(--accent); }
+
+  .app { display: grid; grid-template-columns: 1fr 280px; gap: 16px; margin-top: 20px; }
+  @media (max-width: 800px) { .app { grid-template-columns: 1fr; } }
+
+  .stage {
+    position: relative; background: #000; border-radius: 12px; overflow: hidden;
+    aspect-ratio: 4 / 3; display: grid; place-items: center;
+  }
+  .stage canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .overlay {
+    position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+    padding: 16px; background: rgba(0, 0, 0, .6);
+  }
+  .overlay[hidden] { display: none; }
+  button {
+    font: inherit; font-weight: 600; font-size: 1.05rem; cursor: pointer;
+    padding: 12px 24px; border: 0; border-radius: 999px; background: var(--accent); color: #222;
+  }
+  button:disabled { opacity: .5; cursor: wait; }
+  .status { margin-top: 10px; color: var(--muted); font-size: .9rem; }
+
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; }
+  .panel h2 { margin: 0 0 12px; font-size: 1.1rem; }
+  .gestures { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .gestures li {
+    display: grid; grid-template-columns: 40px 1fr 44px; align-items: center; gap: 4px 8px;
+    padding: 8px; border-radius: 8px; transition: background .15s;
+  }
+  .gestures li.active { background: var(--ok); }
+  .gestures .emoji { grid-row: span 2; font-size: 28px; text-align: center; }
+  .gestures .name { font-weight: 600; }
+  .gestures .pct { grid-row: span 2; text-align: right; font-size: .85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .gestures li.active .pct { color: var(--text); }
+  .bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .bar span { display: block; height: 100%; width: 0; background: var(--accent); }
+  .now { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 10px; min-height: 64px; }
+  .now .label { color: var(--muted); }
+  .now .value { font-size: 1.3rem; font-weight: 700; color: #5be08a; }
+  .now .value.none { color: var(--muted); }
+
+  section.info { margin-top: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  section.info h2 { margin-top: 0; font-size: 1.15rem; }
+  section.info ol, section.info ul { padding-left: 1.3em; }
+  code { background: var(--surface-2); padding: 1px 6px; border-radius: 4px; font-size: .9em; }
+  footer { margin-top: 24px; color: var(--muted); font-size: .85rem; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>✌️ Gesture Emoji</h1>
+    <p>웹캠으로 손 제스처를 인식하면 이모지가 날아갑니다. 영상은 브라우저 안에서만 처리되고 어디에도 전송되지 않습니다.</p>
+  </header>
+
+  <div class="app">
+    <div class="stage">
+      <canvas id="canvas" width="640" height="480"></canvas>
+      <div class="overlay" id="overlay">
+        <div>
+          <button id="start" disabled>모델 불러오는 중…</button>
+          <div class="status" id="status">MediaPipe 손 인식 모델을 불러오고 있습니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="panel">
+      <h2>학습한 제스처</h2>
+      <ul class="gestures" id="gestures"></ul>
+      <div class="now">
+        <span class="label">지금:</span>
+        <span class="value none" id="now">–</span>
+      </div>
+    </aside>
+  </div>
+
+  <section class="info">
+    <h2>사용 방법</h2>
+    <ol>
+      <li><b>카메라 시작</b>을 누르고 카메라 권한을 허용하세요.</li>
+      <li>오른쪽 목록의 제스처를 손으로 해 보세요. 확률이 70%를 넘으면 초록색으로 표시되고 손에서 이모지가 날아갑니다.</li>
+    </ol>
+    <h2>나만의 제스처 만들기</h2>
+    <p>이 페이지의 모델은 Python으로 직접 녹화·학습한 것입니다. 저장소에서 내 제스처를 학습시켜 바꿀 수 있습니다.</p>
+    <ol>
+      <li><code>python collect_gestures.py v ok</code> — 녹화하고 이모지 연결</li>
+      <li><code>python train_gestures.py</code> — 학습</li>
+      <li><code>python export_web_model.py</code> — 웹용 모델(<code>docs/gesture_model.json</code>)로 변환 후 푸시</li>
+    </ol>
+    <p><a href="https://github.com/steve5781-a11y/mediapipe-hand">GitHub 저장소 보기 →</a></p>
+  </section>
+
+  <footer>MediaPipe Hand Landmarker + 직접 학습한 MLP 분류기</footer>
+</main>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/vision_bundle.mjs";
+
+const THRESHOLD = 0.7;       // 이 확률 이상일 때만 제스처로 인정
+const SPAWN_PER_SEC = 15;    // 초당 생기는 이모지 수
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
+];
+const EMOJI_FONT = '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const startBtn = document.getElementById("start");
+const statusEl = document.getElementById("status");
+const overlayEl = document.getElementById("overlay");
+const nowEl = document.getElementById("now");
+const listEl = document.getElementById("gestures");
+
+// 거울 모드로 뒤집은 프레임을 손 인식에 넣는다 (Python 버전과 같은 조건 → 같은 모델 사용 가능)
+const mirror = document.createElement("canvas");
+const mirrorCtx = mirror.getContext("2d");
+const video = document.createElement("video");
+video.playsInline = true;
+video.muted = true;
+
+let landmarker, model, rows = [];
+
+// ---------- 모델 ----------
+function toFeature(landmarks, handedness, w, h) {
+  // 손목 기준 이동 → 왼손이면 좌우 반전 → 손 크기로 나눔 (collect_gestures.py 의 to_feature 와 동일)
+  const pts = landmarks.map(l => [l.x * w, l.y * h, l.z * w]);
+  const [x0, y0, z0] = pts[0];
+  let scale = 1e-6;
+  for (const p of pts) {
+    p[0] -= x0; p[1] -= y0; p[2] -= z0;
+    if (handedness === "Left") p[0] = -p[0];
+    scale = Math.max(scale, Math.hypot(p[0], p[1]));
+  }
+  return pts.flat().map(v => v / scale);
+}
+
+function predict(x) {
+  // Linear → ReLU → Linear → ReLU → Linear → softmax
+  let a = x;
+  model.layers.forEach((layer, i) => {
+    const out = layer.b.map((b, j) => {
+      let s = b;
+      const row = layer.w[j];
+      for (let k = 0; k < a.length; k++) s += row[k] * a[k];
+      return s;
+    });
+    a = i < model.layers.length - 1 ? out.map(v => Math.max(0, v)) : out;
+  });
+  const m = Math.max(...a);
+  const e = a.map(v => Math.exp(v - m));
+  const sum = e.reduce((s, v) => s + v, 0);
+  return e.map(v => v / sum);
+}
+
+// ---------- 오른쪽 패널 ----------
+function buildPanel() {
+  listEl.innerHTML = "";
+  rows = model.labels.map(label => {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="emoji"></span><span class="name"></span><span class="pct">0%</span><div class="bar"><span></span></div>`;
+    li.querySelector(".emoji").textContent = model.emojis[label] || "";
+    li.querySelector(".name").textContent = label;
+    listEl.appendChild(li);
+    return { li, pct: li.querySelector(".pct"), bar: li.querySelector(".bar span") };
+  });
+}
+
+function updatePanel(best, recognized) {
+  rows.forEach((row, i) => {
+    row.pct.textContent = `${Math.round(best[i] * 100)}%`;
+    row.bar.style.width = `${best[i] * 100}%`;
+    row.li.classList.toggle("active", recognized.includes(model.labels[i]));
+  });
+  if (recognized.length) {
+    const name = recognized[0];
+    nowEl.textContent = `${model.emojis[name] || ""} ${name}`;
+    nowEl.classList.remove("none");
+  } else {
+    nowEl.textContent = "–";
+    nowEl.classList.add("none");
+  }
+}
+
+// ---------- 날아가는 이모지 ----------
+const flying = [];
+function spawn(emoji, x, y, now) {
+  flying.push({
+    emoji, x, y, born: now,
+    vx: (Math.random() * 2 - 1) * 120,     // 픽셀/초
+    vy: -(180 + Math.random() * 200),      // 위로
+    size: 35 + Math.random() * 45,
+    life: 1.2 + Math.random(),             // 초
+    phase: Math.random() * Math.PI * 2,
+  });
+}
+
+function drawFlying(now, dt) {
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = flying.length - 1; i >= 0; i--) {
+    const p = flying[i];
+    const age = (now - p.born) / p.life;
+    if (age >= 1) { flying.splice(i, 1); continue; }
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    const wobble = Math.sin(now * 6 + p.phase) * 15;           // 좌우로 살랑살랑
+    const size = p.size * (0.5 + 0.7 * Math.min(age * 3, 1));  // 처음엔 작다가 커짐
+    ctx.globalAlpha = age < 0.6 ? 1 : (1 - age) / 0.4;         // 끝날 때 서서히 사라짐
+    ctx.font = `${size}px ${EMOJI_FONT}`;
+    ctx.fillText(p.emoji, p.x + wobble, p.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBanner(name, emoji) {
+  const text = `${emoji} ${name} detected!`;
+  ctx.font = `bold 34px system-ui, sans-serif`;
+  const tw = ctx.measureText(text).width;
+  const x = canvas.width / 2;
+  ctx.fillStyle = "rgba(30, 30, 30, 0.85)";
+  ctx.beginPath();
+  ctx.roundRect(x - tw / 2 - 20, 14, tw + 40, 60, 12);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x, 45);
+}
+
+function drawHand(pts) {
+  ctx.strokeStyle = "#00ff00";
+  ctx.lineWidth = 2;
+  for (const [a, b] of HAND_CONNECTIONS) {
+    ctx.beginPath();
+    ctx.moveTo(pts[a][0], pts[a][1]);
+    ctx.lineTo(pts[b][0], pts[b][1]);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#ff3030";
+  for (const [x, y] of pts) {
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ---------- 메인 루프 ----------
+let prev = performance.now() / 1000;
+let lastVideoTime = -1;
+let result = null;
+
+function loop() {
+  const now = performance.now() / 1000;
+  const dt = Math.min(now - prev, 0.1);
+  prev = now;
+  const w = canvas.width, h = canvas.height;
+
+  mirrorCtx.save();
+  mirrorCtx.translate(w, 0);
+  mirrorCtx.scale(-1, 1);
+  mirrorCtx.drawImage(video, 0, 0, w, h);
+  mirrorCtx.restore();
+  if (video.currentTime !== lastVideoTime) {
+    lastVideoTime = video.currentTime;
+    result = landmarker.detectForVideo(mirror, performance.now());
+  }
+  ctx.drawImage(mirror, 0, 0);
+
+  const best = new Array(model.labels.length).fill(0);
+  const recognized = [];
+  let banner = null;
+  (result?.landmarks || []).forEach((landmarks, i) => {
+    const hand = result.handedness[i][0].categoryName;
+    const pts = landmarks.map(l => [l.x * w, l.y * h]);
+    drawHand(pts);
+
+    const probs = predict(toFeature(landmarks, hand, w, h));
+    probs.forEach((p, j) => { best[j] = Math.max(best[j], p); });
+    const top = probs.indexOf(Math.max(...probs));
+    const name = probs[top] >= THRESHOLD ? model.labels[top] : "?";
+    if (name !== "?" && !recognized.includes(name)) recognized.push(name);
+
+    const emoji = model.emojis[name];
+    if (emoji) {
+      banner ||= [name, emoji];
+      if (Math.random() < SPAWN_PER_SEC * dt) {
+        const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+        const cy = Math.min(...pts.map(p => p[1]));  // 손 위쪽에서 출발
+        spawn(emoji, cx, cy, now);
+      }
+    }
+
+    const x0 = Math.min(...pts.map(p => p[0]));
+    const y0 = Math.max(Math.min(...pts.map(p => p[1])) - 10, 30);
+    ctx.font = "bold 24px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#ff40ff";
+    ctx.fillText(`${name} ${probs[top].toFixed(2)}`, x0, y0);
+  });
+
+  drawFlying(now, dt);
+  if (banner) drawBanner(...banner);
+  updatePanel(best, recognized);
+  requestAnimationFrame(loop);
+}
+
+// ---------- 시작 ----------
+async function init() {
+  try {
+    const [vision, res] = await Promise.all([
+      FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.1.0/wasm"),
+      fetch("gesture_model.json"),
+    ]);
+    model = await res.json();
+    buildPanel();
+    landmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task",
+        delegate: "GPU",
+      },
+      runningMode: "VIDEO",
+      numHands: 2,
+    });
+    startBtn.disabled = false;
+    startBtn.textContent = "📷 카메라 시작";
+    statusEl.textContent = "준비 완료. 버튼을 누르고 카메라 권한을 허용하세요.";
+  } catch (err) {
+    console.error(err);
+    startBtn.textContent = "불러오기 실패";
+    statusEl.textContent = `모델을 불러오지 못했습니다: ${err.message}`;
+  }
+}
+
+startBtn.addEventListener("click", async () => {
+  startBtn.disabled = true;
+  try {
+    video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: "user" }, audio: false,
+    });
+    await video.play();
+    canvas.width = mirror.width = video.videoWidth;
+    canvas.height = mirror.height = video.videoHeight;
+    canvas.parentElement.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+    overlayEl.hidden = true;
+    requestAnimationFrame(loop);
+  } catch (err) {
+    console.error(err);
+    startBtn.disabled = false;
+    statusEl.textContent = "카메라를 열 수 없습니다. 권한을 허용했는지, 다른 프로그램이 카메라를 쓰고 있지 않은지 확인하세요.";
+  }
+});
+
+init();
+</script>
+</body>
+</html>

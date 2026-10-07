@@ -4,19 +4,42 @@
 
 - **기본 데모:** Hand Landmarker / Gesture Recognizer / Face Landmarker
 - **커스텀 제스처:** 내가 원하는 손 모양을 직접 녹화 → 학습 → 실시간 인식
-- **하트 효과:** 학습한 `heart` 제스처를 하면 손에서 ❤️ 이모지가 날아감
+- **🌐 웹 데모:** https://steve5781-a11y.github.io/mediapipe-hand/ — 설치 없이 브라우저에서 바로 실행
+- **이모지 효과:** 제스처마다 이모지를 연결 → 인식되면 화면에 표시되고 손에서 이모지가 날아감 (❤️ ✌️ 👌 …)
 
-<p align="center"><img src="docs/heart_effect.png" width="480" alt="하트 이모지 효과 미리보기"></p>
+<p align="center"><img src="docs/emoji_effect.png" width="480" alt="이모지 효과 미리보기"></p>
 
 ## 목차
 
+1. [웹 데모 (GitHub Pages)](#웹-데모-github-pages)
 1. [설치](#설치)
 2. [기본 데모](#기본-데모)
 3. [커스텀 제스처 학습](#커스텀-제스처-학습) ⭐
-4. [하트 이모지 효과](#하트-이모지-효과)
+4. [이모지 효과](#이모지-효과)
 5. [간단 버전: 학습 없이 바로 인식](#간단-버전-학습-없이-바로-인식-my_gesturepy)
 6. [참고 자료](#참고-자료)
 7. [문제 해결](#문제-해결)
+
+## 웹 데모 (GitHub Pages)
+
+**https://steve5781-a11y.github.io/mediapipe-hand/**
+
+`카메라 시작`을 누르고 권한을 허용하면 학습한 제스처(❤️ heart, 👌 ok, ✊ rock, ✌️ v)를 인식합니다.
+오른쪽 패널에 제스처 목록과 확률이 보이고, 인식되면 초록색으로 표시되며 손에서 이모지가 날아갑니다.
+영상은 브라우저 안에서만 처리되고 서버로 전송되지 않습니다.
+
+- 손 인식: MediaPipe Tasks Vision **JS** (`@mediapipe/tasks-vision@1.1.0`, Python과 같은 버전)
+- 제스처 분류: Python에서 학습한 모델을 `export_web_model.py`로 `docs/gesture_model.json`에 변환해 브라우저에서 직접 계산
+- 페이지 소스: [`docs/index.html`](docs/index.html) — `main` 브랜치의 `docs/` 폴더가 그대로 배포됩니다
+
+**내 제스처로 웹 데모 바꾸기:** 수집 → 학습 후
+
+```bash
+python export_web_model.py   # docs/gesture_model.json 갱신 (PyTorch와 예측이 같은지 자동 검증)
+git add docs/gesture_model.json && git commit -m "Update web model" && git push
+```
+
+푸시하고 1~2분 뒤 웹 페이지에 반영됩니다.
 
 ## 설치
 
@@ -32,7 +55,7 @@ pip install -U -r requirements.txt
 | `opencv-python` | 웹캠 입력, 화면 표시 |
 | `numpy` | 좌표 계산 |
 | `torch` | 커스텀 제스처 분류 모델 학습/추론 |
-| `Pillow` | 하트 이모지 그리기 (`cv2.putText`는 이모지를 못 그림) |
+| `Pillow` | 이모지 그리기 (`cv2.putText`는 이모지를 못 그림) |
 
 테스트 환경: Windows 11, Python 3.14, mediapipe 1.1.0, OpenCV 5.0, PyTorch 2.14
 
@@ -62,14 +85,15 @@ python all_webcam.py
 
 ```
  1) collect_gestures.py      2) train_gestures.py       3) custom_gesture_webcam.py
- 웹캠으로 손 모양 녹화   →   분류 모델 학습        →   실시간 인식 (+ 하트 효과)
+ 웹캠으로 손 모양 녹화   →   분류 모델 학습        →   실시간 인식 + 이모지 효과
    gesture_data.csv            gesture_model.pt
+   gesture_emojis.json
 ```
 
 ### 1) 데이터 수집 — `collect_gestures.py`
 
 ```bash
-python collect_gestures.py heart rock none
+python collect_gestures.py heart v ok none
 ```
 
 실행할 때 제스처 이름(영문)을 적으면 목록에 바로 들어갑니다. 이름 없이 실행하고 창에서 `n`으로 추가해도 됩니다.
@@ -79,6 +103,7 @@ python collect_gestures.py heart rock none
 | `1`~`9` | 제스처 선택 (왼쪽 위 목록에서 `>` 표시) |
 | `SPACE` 또는 **REC 버튼 클릭** | **1초 대기(READY) 뒤 3초 동안 자동 녹화** — 녹화 중에는 양손을 자유롭게 쓸 수 있음 |
 | `n` | 새 제스처 이름 입력 (Enter 확정, ESC 취소) — **키보드가 영문 상태여야 함** |
+| **오른쪽 위 이모지 클릭** | 선택한 제스처에 이모지 연결 (노란 테두리 = 현재 연결된 이모지, 목록의 이름 옆에도 표시) |
 | `d` | 선택한 제스처의 데이터 삭제 (잘못 녹화했을 때) |
 | `q` / `ESC` | 종료 |
 
@@ -115,6 +140,8 @@ python custom_gesture_webcam.py
 
 손 위에 `heart 0.98`처럼 제스처 이름과 확률이 표시됩니다. 확률이 `THRESHOLD`(기본 0.7)보다 낮으면 `?`로 표시됩니다.
 
+화면 오른쪽 패널에는 **학습한 제스처 목록**(이모지 + 확률 막대)이 표시되고, 인식된 제스처는 **초록 배경**, 맨 아래 `Now:`에 지금 인식된 제스처가 나옵니다.
+
 ### 동작 원리
 
 ```
@@ -126,20 +153,38 @@ python custom_gesture_webcam.py
 손의 **위치·크기와 상관없이 손 모양만** 비교하므로 적은 데이터로도 잘 학습됩니다.
 (공식 학습 도구 `mediapipe-model-maker`는 TensorFlow가 필요해 Python 3.14에서 설치되지 않아 PyTorch로 직접 구현했습니다.)
 
-## 하트 이모지 효과
+## 이모지 효과
 
-`custom_gesture_webcam.py`에서 **`heart` 제스처가 인식되는 동안 손 위에서 ❤️ 이모지가 계속 나와 날아갑니다.**
-하트는 위로 날아가며 좌우로 흔들리고, 점점 커지다가 서서히 사라집니다.
+수집할 때 이모지를 연결해 둔 제스처를 `custom_gesture_webcam.py`에서 하면
+**화면 위쪽에 `✌️ v detected!`처럼 인식 표시가 뜨고, 손 위에서 그 이모지가 계속 날아갑니다.**
+이모지는 위로 날아가며 좌우로 흔들리고, 점점 커지다가 서서히 사라집니다.
 
-파일 상단에서 바꿀 수 있는 값:
+### 새 제스처 + 이모지 추가하기 (예: 브이 ✌️, 오케이 👌)
+
+```bash
+python collect_gestures.py v ok      # 이름은 창에서 n 으로 입력해도 됨
+```
+
+1. `1`~`9`로 제스처 선택 (예: `v`)
+2. 오른쪽 위 선택판에서 **✌️ 클릭** → 이름 옆에 ✌️가 붙음
+3. `SPACE` 또는 REC 버튼으로 녹화 (2~3번)
+4. 다른 제스처도 같은 방법으로 (예: `ok` 선택 → 👌 클릭 → 녹화)
+5. `python train_gestures.py`로 다시 학습 → `python custom_gesture_webcam.py`로 확인
+
+- 연결 정보는 `gesture_emojis.json`에 저장됩니다. 처음에는 `heart` → ❤️ 가 기본으로 연결되어 있습니다.
+- 이모지를 바꾸는 것만은 다시 학습할 필요가 없습니다 (인식 스크립트만 다시 실행).
+- 이모지가 없는 제스처(예: `none`)는 이름만 표시되고 효과는 없습니다.
+
+선택판 이모지: ❤️ ✌️ 👌 👍 👎 👏 👋 ✊ 🤟 🙏 🔥 ⭐ 🎉 😀 😍 💯 — 더 넣고 싶으면 `emoji_effect.py`의 `PALETTE`에 추가하세요.
+
+`custom_gesture_webcam.py` 상단 설정:
 
 | 설정 | 기본값 | 설명 |
 | --- | --- | --- |
-| `EFFECT_GESTURE` | `"heart"` | 하트가 나오는 제스처 이름 (수집할 때 쓴 이름과 같아야 함) |
-| `SPAWN_PER_SEC` | `15` | 초당 생기는 하트 수 |
+| `SPAWN_PER_SEC` | `15` | 초당 생기는 이모지 수 |
 | `THRESHOLD` | `0.7` | 이 확률 이상일 때만 제스처로 인정 |
 
-이모지는 Windows 기본 컬러 이모지 폰트(`seguiemj.ttf`)로 그립니다. 폰트가 없는 환경에서는 직접 그린 빨간 하트로 대신합니다.
+이모지는 Windows 기본 컬러 이모지 폰트(`seguiemj.ttf`)로 그립니다. 폰트가 없는 환경에서는 빨간 동그라미로 대신합니다.
 
 ## 간단 버전: 학습 없이 바로 인식 (`my_gesture.py`)
 
@@ -165,7 +210,7 @@ python my_gesture.py heart rock
 | `gesture_recognizer.task` | 8.4 MB | [Gesture Recognizer](https://ai.google.dev/edge/mediapipe/solutions/vision/gesture_recognizer) — [다운로드](https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/latest/gesture_recognizer.task) |
 | `face_landmarker.task` | 3.8 MB | [Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker) — [다운로드](https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task) |
 
-직접 모은 데이터(`gesture_data.csv`, `my_gestures.npz`)와 학습 결과(`gesture_model.pt`)는 `.gitignore`로 제외되어 있습니다.
+직접 모은 데이터(`gesture_data.csv`, `my_gestures.npz`), 이모지 연결(`gesture_emojis.json`)과 학습 결과(`gesture_model.pt`)는 `.gitignore`로 제외되어 있습니다.
 
 ### 기본 제스처 (Gesture Recognizer)
 

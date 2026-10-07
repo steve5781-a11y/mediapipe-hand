@@ -5,6 +5,7 @@
   1~9        제스처 선택
   SPACE / REC 버튼 클릭
              1초 뒤 3초 동안 자동 녹화 (그동안 양손 자유)
+  이모지 클릭 선택한 제스처에 이모지 연결 (오른쪽 위 선택판, 인식할 때 날아감)
   d          선택한 제스처의 데이터 삭제
   q / ESC    종료
 """
@@ -20,12 +21,15 @@ import numpy as np
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
+from emoji_effect import PALETTE, load_emojis, overlay, save_emojis
+
 MODEL_PATH = Path(__file__).parent / "hand_landmarker.task"
 DATA_PATH = Path(__file__).parent / "gesture_data.csv"
 CAMERA_INDEX = 0
 WINDOW = "Collect Gestures"
 COUNTDOWN_SEC = 1.0  # 녹화 버튼을 누르고 실제 녹화가 시작될 때까지
 RECORD_SEC = 3.0     # 녹화 시간
+CELL = 44            # 이모지 선택판 한 칸 크기
 
 # 21개 랜드마크 연결선 (엄지, 검지, 중지, 약지, 새끼, 손바닥)
 HAND_CONNECTIONS = [
@@ -84,6 +88,7 @@ def save_data(rows):
 def main():
     rows = load_data()
     labels = list(dict.fromkeys([*(row[0] for row in rows), *sys.argv[1:]]))
+    emojis = load_emojis()  # 제스처 이름 → 이모지
 
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -91,6 +96,7 @@ def main():
 
     clicks = []
     cv2.namedWindow(WINDOW)
+    cv2.setWindowProperty(WINDOW, cv2.WND_PROP_TOPMOST, 1)  # 다른 창에 가려지지 않게 맨 앞에
     cv2.setMouseCallback(WINDOW, lambda e, x, y, *_: e == cv2.EVENT_LBUTTONDOWN and clicks.append((x, y)))
 
     current = 0        # 선택된 제스처 번호
@@ -107,12 +113,21 @@ def main():
             now = time.monotonic()
             button = (w - 160, h - 80, w - 20, h - 20)  # REC 버튼 (오른쪽 아래)
 
-            # REC 버튼 클릭
+            px0 = w - 2 * CELL - 10                     # 이모지 선택판 (오른쪽 위)
+
+            # 마우스 클릭: REC 버튼 / 이모지 선택판
             for cx, cy in clicks:
-                if button[0] <= cx <= button[2] and button[1] <= cy <= button[3] \
-                        and labels and rec_start is None:
+                if not labels or rec_start is not None:
+                    continue
+                if button[0] <= cx <= button[2] and button[1] <= cy <= button[3]:
                     rec_start = now
                     print(f"[{labels[current]}] 녹화 준비")
+                elif cx >= px0 and cy >= 10:
+                    i = (cy - 10) // CELL * 2 + (cx - px0) // CELL
+                    if i < len(PALETTE):
+                        emojis[labels[current]] = PALETTE[i]
+                        save_emojis(emojis)
+                        print(f"[{labels[current]}] 이모지 연결 ({i + 1}번째)")  # 이모지는 cp949 콘솔에서 print 불가
             clicks.clear()
 
             # 녹화 상태: 대기 → 녹화 → 끝나면 저장
@@ -144,8 +159,11 @@ def main():
             for i, label in enumerate(labels):
                 selected = i == current
                 color = (0, 0, 255) if selected and phase else (0, 255, 255) if selected else (200, 200, 200)
-                cv2.putText(frame, f"{'>' if selected else ' '}{i + 1}: {label} ({counts[label]})",
-                            (10, 30 + i * 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                text = f"{'>' if selected else ' '}{i + 1}: {label} ({counts[label]})"
+                cv2.putText(frame, text, (10, 30 + i * 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                if label in emojis:  # 연결된 이모지를 이름 옆에 표시
+                    tw = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0][0]
+                    overlay(frame, emojis[label], 10 + tw + 18, 23 + i * 30, 24)
             msg = f"new name: {typing}_  (Enter)" if typing is not None \
                 else "" if labels else "press n to add a gesture name (English input mode)"
             cv2.putText(frame, msg, (10, 30 + len(labels) * 30),
@@ -163,11 +181,19 @@ def main():
                     cv2.putText(frame, "NO HAND", (w // 2 - 100, h // 2),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
 
+            # 이모지 선택판: 선택한 제스처에 연결된 이모지는 노란 테두리
+            for i, emoji in enumerate(PALETTE):
+                x, y = px0 + i % 2 * CELL, 10 + i // 2 * CELL
+                chosen = labels and emojis.get(labels[current]) == emoji
+                cv2.rectangle(frame, (x, y), (x + CELL - 2, y + CELL - 2),
+                              (0, 255, 255) if chosen else (60, 60, 60), 2 if chosen else -1)
+                overlay(frame, emoji, x + CELL // 2 - 1, y + CELL // 2 - 1, CELL - 12)
+
             # REC 버튼
             cv2.rectangle(frame, button[:2], button[2:], (0, 0, 255) if phase else (80, 80, 80), -1)
             cv2.circle(frame, (button[0] + 30, h - 50), 10, (255, 255, 255), -1)
             cv2.putText(frame, "REC", (button[0] + 55, h - 38), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-            cv2.putText(frame, "n: new  1-9: select  SPACE: rec  d: delete  q: quit",
+            cv2.putText(frame, "n:new 1-9:select SPACE:rec emoji:click d:delete q:quit",
                         (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             cv2.imshow(WINDOW, frame)

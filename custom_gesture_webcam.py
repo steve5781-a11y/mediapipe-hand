@@ -1,9 +1,11 @@
-"""3단계: 학습한 모델로 실시간 제스처 인식 + heart 제스처를 하면 하트 이모지가 날아감
+"""3단계: 학습한 모델로 실시간 제스처 인식 + 이모지 효과
 
 실행: python custom_gesture_webcam.py   (종료: q 또는 ESC)
-확률이 THRESHOLD보다 낮으면 "?"로 표시한다.
+- 확률이 THRESHOLD보다 낮으면 "?"로 표시한다.
+- 이모지가 연결된 제스처(collect_gestures.py에서 선택)를 하면
+  화면 위에 "인식됨" 표시가 뜨고 손에서 그 이모지가 날아간다.
+- 오른쪽 패널: 학습한 제스처 목록 + 확률 막대, 지금 인식된 제스처는 초록색
 """
-import math
 import random
 import time
 
@@ -11,79 +13,56 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFont
 
 from collect_gestures import CAMERA_INDEX, create_landmarker, draw_hand, to_feature
+from emoji_effect import FlyingEmojis, load_emojis, overlay
 from train_gestures import MODEL_PATH, build_model
 
 THRESHOLD = 0.7
-EFFECT_GESTURE = "heart"  # 이 제스처를 하면 하트가 날아감
-EMOJI_FONT = "C:/Windows/Fonts/seguiemj.ttf"
-SPAWN_PER_SEC = 15        # 초당 생기는 하트 수
+SPAWN_PER_SEC = 15  # 초당 생기는 이모지 수
+PANEL_W = 260       # 오른쪽 제스처 목록 패널 너비
 
 
-def make_heart_sprite():
-    """하트 이모지를 투명 배경 BGRA 이미지로 만든다 (cv2.putText는 이모지를 못 그림)."""
-    img = Image.new("RGBA", (300, 300), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    try:
-        font = ImageFont.truetype(EMOJI_FONT, 109)
-        draw.text((50, 50), "\u2764\ufe0f", font=font, embedded_color=True)
-    except OSError:  # 이모지 폰트가 없으면 직접 그린 하트
-        draw.ellipse((50, 50, 150, 150), fill=(230, 30, 60, 255))
-        draw.ellipse((130, 50, 230, 150), fill=(230, 30, 60, 255))
-        draw.polygon([(55, 120), (225, 120), (140, 230)], fill=(230, 30, 60, 255))
-    img = img.crop(img.getbbox())
-    return cv2.cvtColor(np.array(img), cv2.COLOR_RGBA2BGRA)
+def draw_banner(frame, name, emoji):
+    """화면 위쪽 가운데에 '이모지 + 제스처 이름 detected!' 표시."""
+    w = frame.shape[1]
+    text = f"{name} detected!"
+    tw = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.1, 3)[0][0]
+    x = (w - tw - 70) // 2
+    cv2.rectangle(frame, (x - 15, 10), (x + tw + 85, 80), (40, 40, 40), -1)
+    overlay(frame, emoji, x + 25, 45, 50)
+    cv2.putText(frame, text, (x + 65, 57), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 3)
 
 
-def overlay(frame, sprite, cx, cy, size, alpha):
-    """frame의 (cx, cy)를 중심으로 sprite를 size 크기, alpha 투명도로 합성."""
-    sh, sw = sprite.shape[:2]
-    w, h = max(int(size), 1), max(int(size * sh / sw), 1)
-    img = cv2.resize(sprite, (w, h), interpolation=cv2.INTER_AREA)
-    x1, y1 = int(cx - w / 2), int(cy - h / 2)
-    fx1, fy1 = max(x1, 0), max(y1, 0)
-    fx2, fy2 = min(x1 + w, frame.shape[1]), min(y1 + h, frame.shape[0])
-    if fx1 >= fx2 or fy1 >= fy2:
-        return  # 화면 밖
-    part = img[fy1 - y1:fy2 - y1, fx1 - x1:fx2 - x1]
-    a = part[..., 3:4].astype(np.float32) / 255 * alpha
-    roi = frame[fy1:fy2, fx1:fx2]
-    roi[:] = (part[..., :3] * a + roi * (1 - a)).astype(np.uint8)
+def draw_panel(h, labels, emojis, probs, recognized):
+    """학습한 제스처 목록 + 각 확률 막대. 인식된 제스처는 초록 배경으로 강조."""
+    panel = np.full((h, PANEL_W, 3), 30, np.uint8)
+    cv2.putText(panel, "Gestures", (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+    row_h = min(60, (h - 140) // max(len(labels), 1))
+    for i, (label, p) in enumerate(zip(labels, probs)):
+        y = 55 + i * row_h
+        if label in recognized:
+            cv2.rectangle(panel, (5, y), (PANEL_W - 5, y + row_h - 6), (0, 130, 0), -1)
+        if label in emojis:
+            overlay(panel, emojis[label], 32, y + (row_h - 6) // 2, row_h - 22)
+        cv2.putText(panel, label, (62, y + row_h // 2 - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        bar_y = y + row_h // 2 + 6
+        cv2.rectangle(panel, (62, bar_y), (PANEL_W - 60, bar_y + 8), (80, 80, 80), -1)
+        if int((PANEL_W - 122) * p) > 0:
+            cv2.rectangle(panel, (62, bar_y), (62 + int((PANEL_W - 122) * p), bar_y + 8), (0, 220, 255), -1)
+        cv2.putText(panel, f"{p:.0%}", (PANEL_W - 52, bar_y + 9), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (220, 220, 220), 1)
 
-
-class Hearts:
-    """손에서 생겨 위로 흔들리며 날아가다 사라지는 하트들."""
-
-    def __init__(self):
-        self.sprite = make_heart_sprite()
-        self.items = []
-
-    def spawn(self, x, y, now):
-        self.items.append({
-            "x": x, "y": y, "born": now,
-            "vx": random.uniform(-120, 120),   # 픽셀/초
-            "vy": random.uniform(-380, -180),  # 위로
-            "size": random.uniform(35, 80),
-            "life": random.uniform(1.2, 2.2),  # 초
-            "phase": random.uniform(0, 2 * math.pi),
-        })
-
-    def update_and_draw(self, frame, now, dt):
-        alive = []
-        for p in self.items:
-            age = (now - p["born"]) / p["life"]  # 0 → 1
-            if age >= 1:
-                continue
-            p["x"] += p["vx"] * dt
-            p["y"] += p["vy"] * dt
-            wobble = math.sin(now * 6 + p["phase"]) * 15      # 좌우로 살랑살랑
-            size = p["size"] * (0.5 + 0.7 * min(age * 3, 1))  # 처음엔 작다가 커짐
-            alpha = 1.0 if age < 0.6 else (1 - age) / 0.4     # 끝날 때 서서히 사라짐
-            overlay(frame, self.sprite, p["x"] + wobble, p["y"], size, alpha)
-            alive.append(p)
-        self.items = alive
+    # 맨 아래: 지금 인식된 제스처
+    cv2.line(panel, (10, h - 75), (PANEL_W - 10, h - 75), (90, 90, 90), 1)
+    cv2.putText(panel, "Now:", (15, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
+    if recognized:
+        name = recognized[0]
+        if name in emojis:
+            overlay(panel, emojis[name], 105, h - 38, 44)
+        cv2.putText(panel, name, (135, h - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    else:
+        cv2.putText(panel, "-", (95, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (150, 150, 150), 2)
+    return panel
 
 
 def main():
@@ -94,13 +73,16 @@ def main():
     model = build_model(len(labels))
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
-    print("제스처:", labels)
+    emojis = load_emojis()
+    print("제스처:", labels, " 이모지 연결됨:", [l for l in labels if l in emojis])
 
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
         raise RuntimeError("웹캠을 열 수 없습니다. CAMERA_INDEX를 확인하세요.")
 
-    hearts = Hearts()
+    cv2.namedWindow("Custom Gesture")
+    cv2.setWindowProperty("Custom Gesture", cv2.WND_PROP_TOPMOST, 1)  # 다른 창에 가려지지 않게 맨 앞에
+    flying = FlyingEmojis()
     start = prev = time.monotonic()
     with create_landmarker() as landmarker:
         while True:
@@ -116,26 +98,37 @@ def main():
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             result = landmarker.detect_for_video(mp_image, int((now - start) * 1000))
 
+            banner = None
+            best = np.zeros(len(labels))  # 손이 여러 개면 제스처별 가장 높은 확률
+            recognized = []               # 지금 인식된 제스처 이름들
             for hand_landmarks, handedness in zip(result.hand_landmarks, result.handedness):
                 pts = draw_hand(frame, hand_landmarks)
                 feat = to_feature(hand_landmarks, handedness[0].category_name, w, h)
                 with torch.no_grad():
                     probs = torch.softmax(model(torch.from_numpy(feat)[None]), dim=1)[0]
+                best = np.maximum(best, probs.numpy())
                 score, idx = probs.max(0)
                 name = labels[int(idx)] if score >= THRESHOLD else "?"
+                if name != "?" and name not in recognized:
+                    recognized.append(name)
 
-                if name == EFFECT_GESTURE and random.random() < SPAWN_PER_SEC * dt:
-                    cx = sum(p[0] for p in pts) / len(pts)
-                    cy = min(p[1] for p in pts)  # 손 위쪽에서 출발
-                    hearts.spawn(cx, cy, now)
+                if name in emojis:
+                    banner = banner or (name, emojis[name])
+                    if random.random() < SPAWN_PER_SEC * dt:
+                        cx = sum(p[0] for p in pts) / len(pts)
+                        cy = min(p[1] for p in pts)  # 손 위쪽에서 출발
+                        flying.spawn(emojis[name], cx, cy, now)
 
                 x0 = min(p[0] for p in pts)
                 y0 = max(min(p[1] for p in pts) - 10, 30)
                 cv2.putText(frame, f"{name} {score:.2f}", (x0, y0),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 255), 2)
 
-            hearts.update_and_draw(frame, now, dt)
+            flying.update_and_draw(frame, now, dt)
+            if banner:
+                draw_banner(frame, *banner)
 
+            frame = np.hstack([frame, draw_panel(h, labels, emojis, best, recognized)])
             cv2.imshow("Custom Gesture", frame)
             if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                 break

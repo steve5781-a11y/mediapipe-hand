@@ -7,3 +7,4 @@ venv/
 gesture_data.csv
 gesture_model.pt
 my_gestures.npz
+gesture_emojis.json
